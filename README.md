@@ -1,6 +1,6 @@
 # İzmir ihracatı ve İngiltere iş çevrimi
 
-Streamlit uygulaması; İzmir ihracatını doğrusal trendden arındırıp oranı 100 tabanlı endekse çevirir, ardından merkezlenmiş 3 yıllık hareketli ortalamayı iki kez uygular. NBER’in çeyreklik İngiltere iş çevrimi endeksini yıllık ortalamaya çevirerek aynı grafikte karşılaştırır.
+Streamlit uygulaması; İzmir ihracatını doğrusal trendden arındırıp oranı 100 tabanlı endekse çevirir, ardından merkezlenmiş 3 yıllık hareketli ortalamayı bir kez uygular. NBER’in çeyreklik İngiltere iş çevrimi endeksini yıllık ortalamaya çevirerek aynı grafikte karşılaştırır.
 
 ## Yerel çalıştırma
 
