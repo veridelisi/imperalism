@@ -31,7 +31,7 @@ def read_data(file_bytes: bytes | None, default_path: str) -> pd.DataFrame:
 
 
 def construct_series(frame: pd.DataFrame) -> tuple[pd.DataFrame, tuple[float, float]]:
-    # Raw exports / linear trend × 100; then two centered 3-year moving averages.
+    # Raw exports / linear trend × 100; then one centered 3-year moving average.
     izmir = frame.dropna(subset=["Izmir_exports_GBP_raw"])[["year", "Izmir_exports_GBP_raw"]].copy()
     slope, intercept = np.polyfit(
         izmir["year"].to_numpy(), izmir["Izmir_exports_GBP_raw"].to_numpy(), 1
@@ -40,7 +40,6 @@ def construct_series(frame: pd.DataFrame) -> tuple[pd.DataFrame, tuple[float, fl
     izmir["Izmir_ratio_index"] = 100 * izmir["Izmir_exports_GBP_raw"] / izmir["Izmir_linear_trend_GBP"]
     izmir["Izmir_Kurmus_index"] = (
         izmir["Izmir_ratio_index"]
-        .rolling(3, center=True, min_periods=3).mean()
         .rolling(3, center=True, min_periods=3).mean()
     )
     out = frame.copy()
@@ -52,7 +51,7 @@ def construct_series(frame: pd.DataFrame) -> tuple[pd.DataFrame, tuple[float, fl
 
 st.title("İzmir İhracatı ve İngiltere İş Çevrimi")
 st.caption(
-    "İzmir’in ham ihracat serisini doğrusal trend ve iki kez uygulanan merkezlenmiş "
+    "İzmir’in ham ihracat serisini doğrusal trend ve merkezlenmiş "
     "3 yıllık hareketli ortalamayla dönüştürür; NBER İngiltere endeksiyle karşılaştırır."
 )
 
@@ -283,8 +282,8 @@ with st.expander("Dönüştürme ve veri notları"):
     st.markdown(
         "**İzmir dönüşümü:** Ham ihracat değerlerine tüm mevcut İzmir yılları üzerinden "
         "doğrusal trend tahmin edilir. Ham değer / tahmini trend × 100 oranına, "
-        "merkezlenmiş 3 yıllık hareketli ortalama iki kez uygulanır. Uç yıllar kaybolduğu "
-        "için düzeltilmiş İzmir endeksi 1866–1910 aralığındadır."
+        "merkezlenmiş 3 yıllık hareketli ortalama bir kez uygulanır. Bu nedenle kullanılabilir "
+        "İzmir endeksi 1865–1911 aralığındadır."
     )
     st.write(f"Tahmini doğrusal trend eğimi: £{slope:,.2f}/yıl; kesişim: £{intercept:,.2f}.")
     st.markdown(
