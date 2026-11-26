@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller
+from scipy.stats import pearsonr
 import streamlit as st
 
 
@@ -114,36 +116,167 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-levels_r = sample["NBER_annual_mean"].corr(sample["Izmir_Kurmus_index"])
-diff_sample = sample[["NBER_annual_mean", "Izmir_Kurmus_index"]].diff().dropna()
-diff_r = diff_sample["NBER_annual_mean"].corr(diff_sample["Izmir_Kurmus_index"])
-metrics = st.columns(2)
-metrics[0].metric("Düzeylerde korelasyon", f"{levels_r:.3f}" if pd.notna(levels_r) else "—")
-metrics[1].metric("Yıllık değişimlerde korelasyon", f"{diff_r:.3f}" if pd.notna(diff_r) else "—")
+st.subheader("1. Zaman serisi analizi")
+st.markdown(
+    "Önce endekslerin durağanlığı ve genel birlikte hareketi inceleniyor. "
+    "ADF testinde sıfır hipotezi serinin birim kök içerdiğidir."
+)
 
-st.subheader("Gecikme analizi")
-lag_rows = []
-uk_series = sample.set_index("year")["NBER_annual_mean"]
-iz_series = sample.set_index("year")["Izmir_Kurmus_index"]
-for lag in range(-4, 5):
-    # lag > 0 compares Izmir(t) with UK(t-lag): UK leads by lag years.
-    pair = pd.concat([iz_series.rename("izmir"), uk_series.shift(lag).rename("uk_lagged")], axis=1).dropna()
-    lag_rows.append({"Gecikme (yıl)": lag, "Korelasyon": pair["izmir"].corr(pair["uk_lagged"]), "N": len(pair)})
-lag_table = pd.DataFrame(lag_rows)
-st.dataframe(lag_table.style.format({"Korelasyon": "{:.3f}"}), use_container_width=True, hide_index=True)
+def adf_row(series, name):
+    values = series.dropna().astype(float)
+    if len(values) < 12:
+        return {
+            "Seri": name, "N": len(values), "Düzey ADF p": np.nan,
+            "İlk fark ADF p": np.nan, "ADF yorumu": "Gözlem sayısı yetersiz"
+        }
+    try:
+        level_test = adfuller(values, regression="c", autolag="AIC")
+        diff_test = adfuller(values.diff().dropna(), regression="c", autolag="AIC")
+        level_p, diff_p = float(level_test[1]), float(diff_test[1])
+        if level_p < 0.05:
+            verdict = "Düzeyde durağanlık lehine"
+        elif diff_p < 0.05:
+            verdict = "Düzeyde birim kök reddedilemedi; ilk fark durağan"
+        else:
+            verdict = "Birim kök sonucu belirsiz"
+        return {
+            "Seri": name, "N": len(values), "Düzey ADF p": level_p,
+            "İlk fark ADF p": diff_p, "ADF yorumu": verdict
+        }
+    except Exception as exc:
+        return {
+            "Seri": name, "N": len(values), "Düzey ADF p": np.nan,
+            "İlk fark ADF p": np.nan, "ADF yorumu": f"Test hesaplanamadı: {exc}"
+        }
 
-two_year = sample.set_index("year").copy()
-two_year["NBER_lag2"] = two_year["NBER_annual_mean"].shift(2)
-two_year = two_year.dropna(subset=["Izmir_Kurmus_index", "NBER_lag2"])
-if len(two_year) >= 5:
-    model = sm.OLS(
-        two_year["Izmir_Kurmus_index"], sm.add_constant(two_year["NBER_lag2"])
-    ).fit(cov_type="HAC", cov_kwds={"maxlags": min(3, len(two_year) - 1)})
-    st.write(
-        f"**İki yıllık gecikmeli regresyon (HAC standart hataları):** "
-        f"β = {model.params['NBER_lag2']:.3f}, SE = {model.bse['NBER_lag2']:.3f}, "
-        f"p = {model.pvalues['NBER_lag2']:.3f}, R² = {model.rsquared:.3f}."
+uk_level = sample.set_index("year")["NBER_annual_mean"]
+iz_level = sample.set_index("year")["Izmir_Kurmus_index"]
+uk_adf = adf_row(uk_level, "NBER İngiltere endeksi")
+iz_adf = adf_row(iz_level, "İzmir ihracat endeksi")
+adf_table = pd.DataFrame([uk_adf, iz_adf])
+st.dataframe(
+    adf_table.style.format({"Düzey ADF p": "{:.3f}", "İlk fark ADF p": "{:.3f}"}),
+    use_container_width=True, hide_index=True
+)
+
+level_pair = pd.concat([uk_level.rename("uk"), iz_level.rename("izmir")], axis=1).dropna()
+diff_pair = level_pair.diff().dropna()
+level_r, level_p = pearsonr(level_pair["uk"], level_pair["izmir"])
+diff_r, diff_p = pearsonr(diff_pair["uk"], diff_pair["izmir"])
+c1, c2 = st.columns(2)
+c1.metric("Düzeylerde korelasyon", f"r = {level_r:.3f}", delta=f"p = {level_p:.3f}")
+c2.metric("Yıllık değişimlerde korelasyon", f"r = {diff_r:.3f}", delta=f"p = {diff_p:.3f}")
+
+delta_fig = go.Figure()
+delta_fig.add_trace(go.Scatter(
+    x=diff_pair.index, y=diff_pair["uk"], mode="lines+markers",
+    name="NBER endeksinin yıllık değişimi", line=dict(color="#2767a8", width=2)
+))
+delta_fig.add_trace(go.Scatter(
+    x=diff_pair.index, y=diff_pair["izmir"], mode="lines+markers",
+    name="İzmir endeksinin yıllık değişimi", line=dict(color="#c6532f", width=2)
+))
+delta_fig.add_hline(y=0, line_dash="dot", line_color="gray")
+delta_fig.update_layout(
+    title="Endekslerde yıllık değişimler",
+    xaxis_title="Yıl", yaxis_title="Endeks puanı değişimi",
+    hovermode="x unified", height=380,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    margin=dict(l=20, r=20, t=70, b=20),
+)
+st.plotly_chart(delta_fig, use_container_width=True)
+
+both_level_stationary = (
+    pd.notna(uk_adf["Düzey ADF p"]) and pd.notna(iz_adf["Düzey ADF p"])
+    and uk_adf["Düzey ADF p"] < 0.05 and iz_adf["Düzey ADF p"] < 0.05
+)
+both_diff_stationary = (
+    pd.notna(uk_adf["İlk fark ADF p"]) and pd.notna(iz_adf["İlk fark ADF p"])
+    and uk_adf["İlk fark ADF p"] < 0.05 and iz_adf["İlk fark ADF p"] < 0.05
+)
+if both_level_stationary:
+    st.info("ADF sonuçları iki endeksin de bu dönemde düzeyde durağan olduğu yönünde; düzey ilişkisi incelenebilir.")
+elif both_diff_stationary:
+    st.info("ADF, düzeylerde birim kökü reddedemiyor; ilk farklar durağan görünüyor. Gecikme testinde değişimler esas alınacak.")
+else:
+    st.warning("ADF sonuçları ortak bir durağanlık yapısını netleştirmiyor. Düzey ve değişim testleri keşifsel olarak birlikte gösterilecek.")
+
+st.subheader("2. İki yıllık gecikme iddiasının ayrı testi")
+st.markdown(
+    "Önceden belirlenen iddia şu şekilde sınanıyor: İngiltere iş çevrimi endeksi iki yıl önceki "
+    "değeriyle İzmir ihracat endeksi arasında pozitif ilişki taşır. Katsayı için H₀: β = 0 "
+    "test edilir; standart hatalar HAC/Newey–West ile düzeltilir."
+)
+
+all_years = data.set_index("year").sort_index()
+uk_all = all_years["NBER_annual_mean"]
+iz_all = all_years["Izmir_Kurmus_index"]
+uk_lag2 = uk_all.shift(2)
+level_test_data = pd.concat(
+    [iz_all.rename("izmir"), uk_lag2.rename("uk_t_minus_2")], axis=1
+).loc[start_year:end_year].dropna()
+
+uk_change = uk_all.diff()
+iz_change = iz_all.diff()
+change_test_data = pd.concat(
+    [iz_change.rename("delta_izmir"), uk_change.shift(2).rename("delta_uk_t_minus_2")],
+    axis=1
+).loc[start_year:end_year].dropna()
+
+def hac_result(frame, y_name, x_name):
+    if len(frame) < 8:
+        return None
+    fit = sm.OLS(frame[y_name], sm.add_constant(frame[x_name])).fit(
+        cov_type="HAC", cov_kwds={"maxlags": min(3, len(frame) - 1)}
     )
+    ci = fit.conf_int().loc[x_name]
+    return {
+        "Gözlem": len(frame), "β": fit.params[x_name], "HAC SE": fit.bse[x_name],
+        "p-değeri": fit.pvalues[x_name], "Alt %95": ci.iloc[0],
+        "Üst %95": ci.iloc[1], "R²": fit.rsquared
+    }
+
+level_result = hac_result(level_test_data, "izmir", "uk_t_minus_2")
+change_result = hac_result(change_test_data, "delta_izmir", "delta_uk_t_minus_2")
+test_rows = []
+if level_result:
+    test_rows.append({"Model": "Endeks düzeyleri: İzmir(t) ~ İngiltere(t−2)", **level_result})
+if change_result:
+    test_rows.append({"Model": "Yıllık değişimler: Δİzmir(t) ~ Δİngiltere(t−2)", **change_result})
+if test_rows:
+    result_table = pd.DataFrame(test_rows)
+    st.dataframe(
+        result_table.style.format({
+            "β": "{:.3f}", "HAC SE": "{:.3f}", "p-değeri": "{:.3f}",
+            "Alt %95": "{:.3f}", "Üst %95": "{:.3f}", "R²": "{:.3f}"
+        }),
+        use_container_width=True, hide_index=True
+    )
+    if both_level_stationary and level_result:
+        chosen = level_result
+        chosen_label = "düzey modelinde"
+    elif both_diff_stationary and change_result:
+        chosen = change_result
+        chosen_label = "yıllık değişim modelinde"
+    else:
+        chosen = None
+        chosen_label = ""
+    if chosen:
+        if chosen["β"] > 0 and chosen["p-değeri"] < 0.05:
+            st.success(
+                f"Seçilen durağanlık yapısına uygun {chosen_label} iki yıllık gecikme için "
+                f"pozitif katsayı istatistiksel olarak anlamlı (β={chosen['β']:.3f}, "
+                f"p={chosen['p-değeri']:.3f})."
+            )
+        else:
+            st.info(
+                f"Seçilen durağanlık yapısına uygun {chosen_label} iki yıllık gecikme iddiası "
+                f"%5 düzeyinde desteklenmiyor (β={chosen['β']:.3f}, p={chosen['p-değeri']:.3f})."
+            )
+    else:
+        st.caption("Durağanlık sonucu net olmadığı için iki yıllık gecikme katsayıları iki modelde de raporlanıyor; sonuç kesin kanıt sayılmamalı.")
+else:
+    st.warning("Seçilen dönem iki yıllık gecikme regresyonu için yeterli gözlem içermiyor.")
 
 with st.expander("Dönüştürme ve veri notları"):
     slope, intercept = trend_params
